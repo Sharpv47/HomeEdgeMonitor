@@ -1,0 +1,375 @@
+#include <stdio.h>
+#include <string.h>
+
+#include "esp_err.h"
+#include "esp_event.h"
+#include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "freertos/task.h"
+
+#include "nvs_flash.h"
+#include "sht4x.h"
+
+#include "mqtt_client.h"
+#include "mqtt_secrets.h"
+#include "wifi_secrets.h"
+
+static const char *TAG = "home_edge";
+
+static sht4x_t dev;
+static EventGroupHandle_t wifi_event_group;
+static esp_mqtt_client_handle_t mqtt_client = NULL;
+
+#define WIFI_CONNECTED_BIT BIT0
+
+#define MQTT_CONNECTED_BIT BIT1
+
+static void mqtt_publish_discovery(void)
+{
+    const char *temperature_config =
+        "{"
+        "\"name\":\"Temperature\","
+        "\"unique_id\":\"homeedge_dev_temperature\","
+        "\"state_topic\":\"homeedge/dev/temperature_f\","
+        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"device_class\":\"temperature\","
+        "\"unit_of_measurement\":\"\\u00b0F\","
+        "\"state_class\":\"measurement\","
+        "\"device\":{"
+            "\"identifiers\":[\"homeedge_dev\"],"
+            "\"name\":\"HomeEdge Dev\","
+            "\"manufacturer\":\"HomeEdge\","
+            "\"model\":\"ESP32-S3 Environmental Monitor\","
+            "\"sw_version\":\"0.1.0\""
+        "}"
+        "}";
+
+    const char *humidity_config =
+        "{"
+        "\"name\":\"Humidity\","
+        "\"unique_id\":\"homeedge_dev_humidity\","
+        "\"state_topic\":\"homeedge/dev/humidity\","
+        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"device_class\":\"humidity\","
+        "\"unit_of_measurement\":\"%\","
+        "\"state_class\":\"measurement\","
+        "\"device\":{"
+            "\"identifiers\":[\"homeedge_dev\"],"
+            "\"name\":\"HomeEdge Dev\","
+            "\"manufacturer\":\"HomeEdge\","
+            "\"model\":\"ESP32-S3 Environmental Monitor\","
+            "\"sw_version\":\"0.1.0\""
+        "}"
+        "}";
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        "homeassistant/sensor/homeedge_dev_temperature/config",
+        temperature_config,
+        0,
+        1,
+        1);
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        "homeassistant/sensor/homeedge_dev_humidity/config",
+        humidity_config,
+        0,
+        1,
+        1);
+
+    ESP_LOGI(TAG, "MQTT discovery published");
+}
+
+static void mqtt_event_handler(
+    void *handler_args,
+    esp_event_base_t base,
+    int32_t event_id,
+    void *event_data)
+{
+    switch ((esp_mqtt_event_id_t)event_id)
+    {
+        case MQTT_EVENT_CONNECTED:
+            ESP_LOGI(TAG, "MQTT connected");
+
+            xEventGroupSetBits(
+                wifi_event_group,
+                MQTT_CONNECTED_BIT);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                "homeedge/dev/status",
+                "online",
+                0,
+                1,
+                1);
+
+            mqtt_publish_discovery();
+
+            break;
+
+        case MQTT_EVENT_DISCONNECTED:
+            ESP_LOGW(TAG, "MQTT disconnected");
+            xEventGroupClearBits(
+                wifi_event_group,
+                MQTT_CONNECTED_BIT);
+            break;
+
+        case MQTT_EVENT_ERROR:
+            ESP_LOGE(TAG, "MQTT error");
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void mqtt_start(void)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+    .broker.address.uri = MQTT_BROKER_URI,
+
+    .credentials.username = MQTT_USERNAME,
+    .credentials.authentication.password = MQTT_PASSWORD,
+
+    .session.keepalive = 20,
+
+    .session.last_will.topic = "homeedge/dev/status",
+    .session.last_will.msg = "offline",
+    .session.last_will.qos = 1,
+    .session.last_will.retain = 1,
+};
+
+    mqtt_client =
+        esp_mqtt_client_init(&mqtt_cfg);
+
+    ESP_ERROR_CHECK(
+        esp_mqtt_client_register_event(
+            mqtt_client,
+            ESP_EVENT_ANY_ID,
+            mqtt_event_handler,
+            NULL));
+
+    ESP_ERROR_CHECK(
+        esp_mqtt_client_start(mqtt_client));
+
+    ESP_LOGI(TAG, "MQTT client started");
+}
+
+static void wifi_event_handler(
+    void *arg,
+    esp_event_base_t event_base,
+    int32_t event_id,
+    void *event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        ESP_LOGI(TAG, "Wi-Fi starting...");
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT &&
+         event_id == WIFI_EVENT_STA_DISCONNECTED)
+{
+    wifi_event_sta_disconnected_t *event =
+        (wifi_event_sta_disconnected_t *)event_data;
+
+    ESP_LOGW(
+        TAG,
+        "Wi-Fi disconnected, reason: %d",
+        event->reason);
+
+    ESP_LOGW(TAG, "Reconnecting...");
+
+    xEventGroupClearBits(
+        wifi_event_group,
+        WIFI_CONNECTED_BIT);
+
+    esp_wifi_connect();
+}
+    else if (event_base == IP_EVENT &&
+             event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+
+        ESP_LOGI(TAG, "Wi-Fi connected");
+        ESP_LOGI(
+            TAG,
+            "IP address: " IPSTR,
+            IP2STR(&event->ip_info.ip));
+
+        xEventGroupSetBits(
+            wifi_event_group,
+            WIFI_CONNECTED_BIT);
+    }
+}
+
+static void wifi_init(void)
+{
+    esp_err_t ret = nvs_flash_init();
+
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
+        ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+    else
+    {
+        ESP_ERROR_CHECK(ret);
+    }
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    esp_netif_create_default_wifi_sta();
+
+    wifi_event_group = xEventGroupCreate();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(
+        esp_event_handler_register(
+            WIFI_EVENT,
+            ESP_EVENT_ANY_ID,
+            wifi_event_handler,
+            NULL));
+
+    ESP_ERROR_CHECK(
+        esp_event_handler_register(
+            IP_EVENT,
+            IP_EVENT_STA_GOT_IP,
+            wifi_event_handler,
+            NULL));
+
+    wifi_config_t wifi_config = {0};
+
+    strlcpy(
+        (char *)wifi_config.sta.ssid,
+        WIFI_SSID,
+        sizeof(wifi_config.sta.ssid));
+
+    strlcpy(
+        (char *)wifi_config.sta.password,
+        WIFI_PASSWORD,
+        sizeof(wifi_config.sta.password));
+
+    ESP_ERROR_CHECK(
+        esp_wifi_set_mode(WIFI_MODE_STA));
+
+    ESP_ERROR_CHECK(
+        esp_wifi_set_config(
+            WIFI_IF_STA,
+            &wifi_config));
+
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    ESP_LOGI(TAG, "Waiting for Wi-Fi connection...");
+
+    xEventGroupWaitBits(
+        wifi_event_group,
+        WIFI_CONNECTED_BIT,
+        pdFALSE,
+        pdTRUE,
+        portMAX_DELAY);
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Home Edge Monitor starting");
+    ESP_LOGI(TAG, "Firmware version: 0.1.0");
+
+    ESP_ERROR_CHECK(i2cdev_init());
+
+    memset(&dev, 0, sizeof(sht4x_t));
+
+    ESP_ERROR_CHECK(
+        sht4x_init_desc(&dev, 0, 8, 9));
+
+    ESP_ERROR_CHECK(sht4x_init(&dev));
+
+    ESP_LOGI(TAG, "SHT40 initialized");
+
+    wifi_init();
+    mqtt_start();
+
+    while (1)
+    {
+        float temperature_c;
+        float humidity;
+
+        ESP_ERROR_CHECK(
+            sht4x_measure(
+                &dev,
+                &temperature_c,
+                &humidity));
+
+        float temperature_f =
+            (temperature_c * 9.0f / 5.0f) + 32.0f;
+
+        if (xEventGroupGetBits(wifi_event_group) & MQTT_CONNECTED_BIT)
+        {
+            char temperature_payload[16];
+            char humidity_payload[16];
+
+            snprintf(
+                temperature_payload,
+                sizeof(temperature_payload),
+                "%.2f",
+                temperature_f);
+
+            snprintf(
+                humidity_payload,
+                sizeof(humidity_payload),
+                "%.2f",
+                humidity);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                "homeedge/dev/temperature_f",
+                temperature_payload,
+                0,
+                1,
+                0);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                "homeedge/dev/humidity",
+                humidity_payload,
+                0,
+                1,
+                0);
+        }
+
+        ESP_LOGI(
+            TAG,
+            "Temperature: %.2f C / %.2f F",
+            temperature_c,
+            temperature_f);
+
+        ESP_LOGI(
+            TAG,
+            "Humidity: %.2f %%",
+            humidity);
+
+        wifi_ap_record_t ap_info;
+
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK)
+        {
+            ESP_LOGI(
+                TAG,
+                "Wi-Fi RSSI: %d dBm",
+                ap_info.rssi);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}

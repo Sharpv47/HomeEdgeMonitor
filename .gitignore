@@ -1,0 +1,14 @@
+# Local secrets
+firmware/main/wifi_secrets.h
+firmware/main/mqtt_secrets.h
+
+# ESP-IDF generated files
+firmware/build/
+firmware/managed_components/
+
+# Local setup/installers
+setup/
+
+# ESP-IDF generated configuration
+firmware/sdkconfig
+firmware/sdkconfig.old
