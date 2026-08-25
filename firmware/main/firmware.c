@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -19,6 +20,7 @@
 #include "wifi_secrets.h"
 
 static const char *TAG = "home_edge";
+#define FIRMWARE_VERSION "0.1.0"
 
 static sht4x_t dev;
 static EventGroupHandle_t wifi_event_group;
@@ -46,7 +48,7 @@ static void mqtt_publish_discovery(void)
             "\"name\":\"HomeEdge Dev\","
             "\"manufacturer\":\"HomeEdge\","
             "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"0.1.0\""
+            "\"sw_version\":\"" FIRMWARE_VERSION "\""
         "}"
         "}";
 
@@ -66,7 +68,68 @@ static void mqtt_publish_discovery(void)
             "\"name\":\"HomeEdge Dev\","
             "\"manufacturer\":\"HomeEdge\","
             "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"0.1.0\""
+            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+        "}"
+        "}";
+
+    const char *rssi_config =
+        "{"
+        "\"name\":\"Wi-Fi Signal\","
+        "\"unique_id\":\"homeedge_dev_rssi\","
+        "\"state_topic\":\"homeedge/dev/rssi\","
+        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"device_class\":\"signal_strength\","
+        "\"unit_of_measurement\":\"dBm\","
+        "\"state_class\":\"measurement\","
+        "\"entity_category\":\"diagnostic\","
+        "\"device\":{"
+            "\"identifiers\":[\"homeedge_dev\"],"
+            "\"name\":\"HomeEdge Dev\","
+            "\"manufacturer\":\"HomeEdge\","
+            "\"model\":\"ESP32-S3 Environmental Monitor\","
+            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+        "}"
+        "}";
+
+    const char *uptime_config =
+        "{"
+        "\"name\":\"Uptime\","
+        "\"unique_id\":\"homeedge_dev_uptime\","
+        "\"state_topic\":\"homeedge/dev/uptime\","
+        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"device_class\":\"duration\","
+        "\"unit_of_measurement\":\"s\","
+        "\"state_class\":\"total_increasing\","
+        "\"entity_category\":\"diagnostic\","
+        "\"device\":{"
+            "\"identifiers\":[\"homeedge_dev\"],"
+            "\"name\":\"HomeEdge Dev\","
+            "\"manufacturer\":\"HomeEdge\","
+            "\"model\":\"ESP32-S3 Environmental Monitor\","
+            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+        "}"
+        "}";
+
+    const char *firmware_config =
+        "{"
+        "\"name\":\"Firmware Version\","
+        "\"unique_id\":\"homeedge_dev_firmware\","
+        "\"state_topic\":\"homeedge/dev/firmware\","
+        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"entity_category\":\"diagnostic\","
+        "\"icon\":\"mdi:chip\","
+        "\"device\":{"
+            "\"identifiers\":[\"homeedge_dev\"],"
+            "\"name\":\"HomeEdge Dev\","
+            "\"manufacturer\":\"HomeEdge\","
+            "\"model\":\"ESP32-S3 Environmental Monitor\","
+            "\"sw_version\":\"" FIRMWARE_VERSION "\""
         "}"
         "}";
 
@@ -86,6 +149,30 @@ static void mqtt_publish_discovery(void)
         1,
         1);
 
+    esp_mqtt_client_publish(
+        mqtt_client,
+        "homeassistant/sensor/homeedge_dev_rssi/config",
+        rssi_config,
+        0,
+        1,
+        1);
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        "homeassistant/sensor/homeedge_dev_uptime/config",
+        uptime_config,
+        0,
+        1,
+        1);
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        "homeassistant/sensor/homeedge_dev_firmware/config",
+        firmware_config,
+        0,
+        1,
+        1);
+
     ESP_LOGI(TAG, "MQTT discovery published");
 }
 
@@ -97,7 +184,7 @@ static void mqtt_event_handler(
 {
     switch ((esp_mqtt_event_id_t)event_id)
     {
-        case MQTT_EVENT_CONNECTED:
+       case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected");
 
             xEventGroupSetBits(
@@ -108,6 +195,14 @@ static void mqtt_event_handler(
                 mqtt_client,
                 "homeedge/dev/status",
                 "online",
+                0,
+                1,
+                1);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                "homeedge/dev/firmware",
+                FIRMWARE_VERSION,
                 0,
                 1,
                 1);
@@ -285,7 +380,7 @@ static void wifi_init(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "Home Edge Monitor starting");
-    ESP_LOGI(TAG, "Firmware version: 0.1.0");
+    ESP_LOGI(TAG, "Firmware version: %s", FIRMWARE_VERSION);
 
     ESP_ERROR_CHECK(i2cdev_init());
 
@@ -302,74 +397,112 @@ void app_main(void)
     mqtt_start();
 
     while (1)
+{
+    float temperature_c;
+    float humidity;
+
+    ESP_ERROR_CHECK(
+        sht4x_measure(
+            &dev,
+            &temperature_c,
+            &humidity));
+
+    float temperature_f =
+        (temperature_c * 9.0f / 5.0f) + 32.0f;
+
+    wifi_ap_record_t ap_info;
+    bool rssi_available =
+        (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK);
+
+    if (xEventGroupGetBits(wifi_event_group) & MQTT_CONNECTED_BIT)
     {
-        float temperature_c;
-        float humidity;
+        char temperature_payload[16];
+        char humidity_payload[16];
+        char rssi_payload[16];
+        char uptime_payload[24];
 
-        ESP_ERROR_CHECK(
-            sht4x_measure(
-                &dev,
-                &temperature_c,
-                &humidity));
-
-        float temperature_f =
-            (temperature_c * 9.0f / 5.0f) + 32.0f;
-
-        if (xEventGroupGetBits(wifi_event_group) & MQTT_CONNECTED_BIT)
-        {
-            char temperature_payload[16];
-            char humidity_payload[16];
-
-            snprintf(
-                temperature_payload,
-                sizeof(temperature_payload),
-                "%.2f",
-                temperature_f);
-
-            snprintf(
-                humidity_payload,
-                sizeof(humidity_payload),
-                "%.2f",
-                humidity);
-
-            esp_mqtt_client_publish(
-                mqtt_client,
-                "homeedge/dev/temperature_f",
-                temperature_payload,
-                0,
-                1,
-                0);
-
-            esp_mqtt_client_publish(
-                mqtt_client,
-                "homeedge/dev/humidity",
-                humidity_payload,
-                0,
-                1,
-                0);
-        }
-
-        ESP_LOGI(
-            TAG,
-            "Temperature: %.2f C / %.2f F",
-            temperature_c,
+        snprintf(
+            temperature_payload,
+            sizeof(temperature_payload),
+            "%.2f",
             temperature_f);
 
-        ESP_LOGI(
-            TAG,
-            "Humidity: %.2f %%",
+        snprintf(
+            humidity_payload,
+            sizeof(humidity_payload),
+            "%.2f",
             humidity);
 
-        wifi_ap_record_t ap_info;
+        int64_t uptime_seconds =
+            esp_timer_get_time() / 1000000;
 
-        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK)
+        snprintf(
+            uptime_payload,
+            sizeof(uptime_payload),
+            "%lld",
+            (long long)uptime_seconds);
+
+        esp_mqtt_client_publish(
+            mqtt_client,
+            "homeedge/dev/temperature_f",
+            temperature_payload,
+            0,
+            1,
+            0);
+
+        esp_mqtt_client_publish(
+            mqtt_client,
+            "homeedge/dev/humidity",
+            humidity_payload,
+            0,
+            1,
+            0);
+
+        if (rssi_available)
         {
-            ESP_LOGI(
-                TAG,
-                "Wi-Fi RSSI: %d dBm",
+            snprintf(
+                rssi_payload,
+                sizeof(rssi_payload),
+                "%d",
                 ap_info.rssi);
-        }
 
-        vTaskDelay(pdMS_TO_TICKS(5000));
+            esp_mqtt_client_publish(
+                mqtt_client,
+                "homeedge/dev/rssi",
+                rssi_payload,
+                0,
+                1,
+                0);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                "homeedge/dev/uptime",
+                uptime_payload,
+                0,
+                1,
+                0);
+        }
     }
+
+    ESP_LOGI(
+        TAG,
+        "Temperature: %.2f C / %.2f F",
+        temperature_c,
+        temperature_f);
+
+    ESP_LOGI(
+        TAG,
+        "Humidity: %.2f %%",
+        humidity);
+
+    if (rssi_available)
+    {
+        ESP_LOGI(
+            TAG,
+            "Wi-Fi RSSI: %d dBm",
+            ap_info.rssi);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(5000));
+}
 }
