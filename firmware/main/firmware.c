@@ -22,7 +22,10 @@
 
 static const char *TAG = "home_edge";
 
+#if HOMEEDGE_HAS_ENV_SENSOR
 static sht4x_t dev;
+#endif
+
 static EventGroupHandle_t wifi_event_group;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 
@@ -32,6 +35,8 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 
 static void mqtt_publish_discovery(void)
 {
+    #if HOMEEDGE_HAS_ENV_SENSOR
+
     const char *temperature_config =
         "{"
         "\"name\":\"Temperature\","
@@ -71,7 +76,7 @@ static void mqtt_publish_discovery(void)
             "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
-
+    #endif
     const char *rssi_config =
         "{"
         "\"name\":\"Wi-Fi Signal\","
@@ -133,6 +138,8 @@ static void mqtt_publish_discovery(void)
         "}"
         "}";
 
+    #if HOMEEDGE_HAS_ENV_SENSOR
+
     esp_mqtt_client_publish(
         mqtt_client,
         HOMEEDGE_DISCOVERY_TOPIC_TEMPERATURE,
@@ -148,6 +155,8 @@ static void mqtt_publish_discovery(void)
         0,
         1,
         1);
+
+    #endif
 
     esp_mqtt_client_publish(
         mqtt_client,
@@ -392,97 +401,93 @@ void app_main(void)
         HOMEEDGE_HAS_WASHER_MONITOR,
         HOMEEDGE_HAS_FREEZER_MONITOR);
 
-    ESP_ERROR_CHECK(i2cdev_init());
+    #if HOMEEDGE_HAS_ENV_SENSOR
 
-    memset(&dev, 0, sizeof(sht4x_t));
+        ESP_ERROR_CHECK(i2cdev_init());
 
-    ESP_ERROR_CHECK(
-        sht4x_init_desc(&dev, 0, 8, 9));
+        memset(&dev, 0, sizeof(sht4x_t));
 
-    ESP_ERROR_CHECK(sht4x_init(&dev));
+        ESP_ERROR_CHECK(
+            sht4x_init_desc(&dev, 0, 8, 9));
 
-    ESP_LOGI(TAG, "SHT40 initialized");
+        ESP_ERROR_CHECK(sht4x_init(&dev));
+
+        ESP_LOGI(TAG, "SHT40 initialized");
+
+    #endif
 
     wifi_init();
     mqtt_start();
 
     while (1)
-{
-    float temperature_c;
-    float humidity;
-
-    ESP_ERROR_CHECK(
-        sht4x_measure(
-            &dev,
-            &temperature_c,
-            &humidity));
-
-    float temperature_f =
-        (temperature_c * 9.0f / 5.0f) + 32.0f;
-
-    wifi_ap_record_t ap_info;
-    bool rssi_available =
-        (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK);
-
-    if (xEventGroupGetBits(wifi_event_group) & MQTT_CONNECTED_BIT)
     {
-        char temperature_payload[16];
-        char humidity_payload[16];
-        char rssi_payload[16];
-        char uptime_payload[24];
+    #if HOMEEDGE_HAS_ENV_SENSOR
 
-        snprintf(
-            temperature_payload,
-            sizeof(temperature_payload),
-            "%.2f",
-            temperature_f);
+        float temperature_c;
+        float humidity;
 
-        snprintf(
-            humidity_payload,
-            sizeof(humidity_payload),
-            "%.2f",
-            humidity);
+        ESP_ERROR_CHECK(
+            sht4x_measure(
+                &dev,
+                &temperature_c,
+                &humidity));
 
-        int64_t uptime_seconds =
-            esp_timer_get_time() / 1000000;
+        float temperature_f =
+            (temperature_c * 9.0f / 5.0f) + 32.0f;
 
-        snprintf(
-            uptime_payload,
-            sizeof(uptime_payload),
-            "%lld",
-            (long long)uptime_seconds);
+    #endif
 
-        esp_mqtt_client_publish(
-            mqtt_client,
-            HOMEEDGE_TOPIC_TEMPERATURE,
-            temperature_payload,
-            0,
-            1,
-            0);
+        wifi_ap_record_t ap_info;
+        bool rssi_available =
+            (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK);
 
-        esp_mqtt_client_publish(
-            mqtt_client,
-            HOMEEDGE_TOPIC_HUMIDITY,
-            humidity_payload,
-            0,
-            1,
-            0);
-
-        if (rssi_available)
+        if (xEventGroupGetBits(wifi_event_group) & MQTT_CONNECTED_BIT)
         {
+    #if HOMEEDGE_HAS_ENV_SENSOR
+
+            char temperature_payload[16];
+            char humidity_payload[16];
+
             snprintf(
-                rssi_payload,
-                sizeof(rssi_payload),
-                "%d",
-                ap_info.rssi);
+                temperature_payload,
+                sizeof(temperature_payload),
+                "%.2f",
+                temperature_f);
+
+            snprintf(
+                humidity_payload,
+                sizeof(humidity_payload),
+                "%.2f",
+                humidity);
 
             esp_mqtt_client_publish(
                 mqtt_client,
-                HOMEEDGE_TOPIC_RSSI,
-                rssi_payload,
+                HOMEEDGE_TOPIC_TEMPERATURE,
+                temperature_payload,
                 0,
                 1,
                 0);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                HOMEEDGE_TOPIC_HUMIDITY,
+                humidity_payload,
+                0,
+                1,
+                0);
+
+    #endif
+
+            char uptime_payload[24];
+
+            int64_t uptime_seconds =
+                esp_timer_get_time() / 1000000;
+
+            snprintf(
+                uptime_payload,
+                sizeof(uptime_payload),
+                "%lld",
+                (long long)uptime_seconds);
 
             esp_mqtt_client_publish(
                 mqtt_client,
@@ -491,28 +496,50 @@ void app_main(void)
                 0,
                 1,
                 0);
+
+            if (rssi_available)
+            {
+                char rssi_payload[16];
+
+                snprintf(
+                    rssi_payload,
+                    sizeof(rssi_payload),
+                    "%d",
+                    ap_info.rssi);
+
+                esp_mqtt_client_publish(
+                    mqtt_client,
+                    HOMEEDGE_TOPIC_RSSI,
+                    rssi_payload,
+                    0,
+                    1,
+                    0);
+            }
         }
-    }
 
-    ESP_LOGI(
-        TAG,
-        "Temperature: %.2f C / %.2f F",
-        temperature_c,
-        temperature_f);
+    #if HOMEEDGE_HAS_ENV_SENSOR
 
-    ESP_LOGI(
-        TAG,
-        "Humidity: %.2f %%",
-        humidity);
-
-    if (rssi_available)
-    {
         ESP_LOGI(
             TAG,
-            "Wi-Fi RSSI: %d dBm",
-            ap_info.rssi);
-    }
+            "Temperature: %.2f C / %.2f F",
+            temperature_c,
+            temperature_f);
 
-    vTaskDelay(pdMS_TO_TICKS(HOMEEDGE_TELEMETRY_INTERVAL_MS));
-}
+        ESP_LOGI(
+            TAG,
+            "Humidity: %.2f %%",
+            humidity);
+
+    #endif
+
+        if (rssi_available)
+        {
+            ESP_LOGI(
+                TAG,
+                "Wi-Fi RSSI: %d dBm",
+                ap_info.rssi);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(HOMEEDGE_TELEMETRY_INTERVAL_MS));
+    }
 }
