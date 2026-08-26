@@ -18,9 +18,9 @@
 #include "mqtt_client.h"
 #include "mqtt_secrets.h"
 #include "wifi_secrets.h"
+#include "homeedge_config.h"
 
 static const char *TAG = "home_edge";
-#define FIRMWARE_VERSION "0.1.0"
 
 static sht4x_t dev;
 static EventGroupHandle_t wifi_event_group;
@@ -35,49 +35,49 @@ static void mqtt_publish_discovery(void)
     const char *temperature_config =
         "{"
         "\"name\":\"Temperature\","
-        "\"unique_id\":\"homeedge_dev_temperature\","
-        "\"state_topic\":\"homeedge/dev/temperature_f\","
-        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_TEMPERATURE "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_TEMPERATURE "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
         "\"device_class\":\"temperature\","
         "\"unit_of_measurement\":\"\\u00b0F\","
         "\"state_class\":\"measurement\","
         "\"device\":{"
-            "\"identifiers\":[\"homeedge_dev\"],"
-            "\"name\":\"HomeEdge Dev\","
-            "\"manufacturer\":\"HomeEdge\","
-            "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
 
     const char *humidity_config =
         "{"
         "\"name\":\"Humidity\","
-        "\"unique_id\":\"homeedge_dev_humidity\","
-        "\"state_topic\":\"homeedge/dev/humidity\","
-        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_HUMIDITY "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_HUMIDITY "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
         "\"device_class\":\"humidity\","
         "\"unit_of_measurement\":\"%\","
         "\"state_class\":\"measurement\","
         "\"device\":{"
-            "\"identifiers\":[\"homeedge_dev\"],"
-            "\"name\":\"HomeEdge Dev\","
-            "\"manufacturer\":\"HomeEdge\","
-            "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
 
     const char *rssi_config =
         "{"
         "\"name\":\"Wi-Fi Signal\","
-        "\"unique_id\":\"homeedge_dev_rssi\","
-        "\"state_topic\":\"homeedge/dev/rssi\","
-        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_RSSI "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_RSSI "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
         "\"device_class\":\"signal_strength\","
@@ -85,20 +85,20 @@ static void mqtt_publish_discovery(void)
         "\"state_class\":\"measurement\","
         "\"entity_category\":\"diagnostic\","
         "\"device\":{"
-            "\"identifiers\":[\"homeedge_dev\"],"
-            "\"name\":\"HomeEdge Dev\","
-            "\"manufacturer\":\"HomeEdge\","
-            "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
 
     const char *uptime_config =
         "{"
         "\"name\":\"Uptime\","
-        "\"unique_id\":\"homeedge_dev_uptime\","
-        "\"state_topic\":\"homeedge/dev/uptime\","
-        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_UPTIME "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_UPTIME "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
         "\"device_class\":\"duration\","
@@ -106,36 +106,36 @@ static void mqtt_publish_discovery(void)
         "\"state_class\":\"total_increasing\","
         "\"entity_category\":\"diagnostic\","
         "\"device\":{"
-            "\"identifiers\":[\"homeedge_dev\"],"
-            "\"name\":\"HomeEdge Dev\","
-            "\"manufacturer\":\"HomeEdge\","
-            "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
 
     const char *firmware_config =
         "{"
         "\"name\":\"Firmware Version\","
-        "\"unique_id\":\"homeedge_dev_firmware\","
-        "\"state_topic\":\"homeedge/dev/firmware\","
-        "\"availability_topic\":\"homeedge/dev/status\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_FIRMWARE "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_FIRMWARE "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
         "\"payload_available\":\"online\","
         "\"payload_not_available\":\"offline\","
         "\"entity_category\":\"diagnostic\","
         "\"icon\":\"mdi:chip\","
         "\"device\":{"
-            "\"identifiers\":[\"homeedge_dev\"],"
-            "\"name\":\"HomeEdge Dev\","
-            "\"manufacturer\":\"HomeEdge\","
-            "\"model\":\"ESP32-S3 Environmental Monitor\","
-            "\"sw_version\":\"" FIRMWARE_VERSION "\""
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
 
     esp_mqtt_client_publish(
         mqtt_client,
-        "homeassistant/sensor/homeedge_dev_temperature/config",
+        HOMEEDGE_DISCOVERY_TOPIC_TEMPERATURE,
         temperature_config,
         0,
         1,
@@ -143,7 +143,7 @@ static void mqtt_publish_discovery(void)
 
     esp_mqtt_client_publish(
         mqtt_client,
-        "homeassistant/sensor/homeedge_dev_humidity/config",
+        HOMEEDGE_DISCOVERY_TOPIC_HUMIDITY,
         humidity_config,
         0,
         1,
@@ -151,7 +151,7 @@ static void mqtt_publish_discovery(void)
 
     esp_mqtt_client_publish(
         mqtt_client,
-        "homeassistant/sensor/homeedge_dev_rssi/config",
+        HOMEEDGE_DISCOVERY_TOPIC_RSSI,
         rssi_config,
         0,
         1,
@@ -159,7 +159,7 @@ static void mqtt_publish_discovery(void)
 
     esp_mqtt_client_publish(
         mqtt_client,
-        "homeassistant/sensor/homeedge_dev_uptime/config",
+        HOMEEDGE_DISCOVERY_TOPIC_UPTIME,
         uptime_config,
         0,
         1,
@@ -167,7 +167,7 @@ static void mqtt_publish_discovery(void)
 
     esp_mqtt_client_publish(
         mqtt_client,
-        "homeassistant/sensor/homeedge_dev_firmware/config",
+       HOMEEDGE_DISCOVERY_TOPIC_FIRMWARE,
         firmware_config,
         0,
         1,
@@ -193,7 +193,7 @@ static void mqtt_event_handler(
 
             esp_mqtt_client_publish(
                 mqtt_client,
-                "homeedge/dev/status",
+                HOMEEDGE_TOPIC_STATUS,
                 "online",
                 0,
                 1,
@@ -201,8 +201,8 @@ static void mqtt_event_handler(
 
             esp_mqtt_client_publish(
                 mqtt_client,
-                "homeedge/dev/firmware",
-                FIRMWARE_VERSION,
+                HOMEEDGE_TOPIC_FIRMWARE,
+                HOMEEDGE_FIRMWARE_VERSION,
                 0,
                 1,
                 1);
@@ -237,7 +237,7 @@ static void mqtt_start(void)
 
     .session.keepalive = 20,
 
-    .session.last_will.topic = "homeedge/dev/status",
+    .session.last_will.topic = HOMEEDGE_TOPIC_STATUS,
     .session.last_will.msg = "offline",
     .session.last_will.qos = 1,
     .session.last_will.retain = 1,
@@ -380,7 +380,7 @@ static void wifi_init(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "Home Edge Monitor starting");
-    ESP_LOGI(TAG, "Firmware version: %s", FIRMWARE_VERSION);
+    ESP_LOGI(TAG, "Firmware version: %s", HOMEEDGE_FIRMWARE_VERSION);
 
     ESP_ERROR_CHECK(i2cdev_init());
 
@@ -444,7 +444,7 @@ void app_main(void)
 
         esp_mqtt_client_publish(
             mqtt_client,
-            "homeedge/dev/temperature_f",
+            HOMEEDGE_TOPIC_TEMPERATURE,
             temperature_payload,
             0,
             1,
@@ -452,7 +452,7 @@ void app_main(void)
 
         esp_mqtt_client_publish(
             mqtt_client,
-            "homeedge/dev/humidity",
+            HOMEEDGE_TOPIC_HUMIDITY,
             humidity_payload,
             0,
             1,
@@ -468,7 +468,7 @@ void app_main(void)
 
             esp_mqtt_client_publish(
                 mqtt_client,
-                "homeedge/dev/rssi",
+                HOMEEDGE_TOPIC_RSSI,
                 rssi_payload,
                 0,
                 1,
@@ -476,7 +476,7 @@ void app_main(void)
 
             esp_mqtt_client_publish(
                 mqtt_client,
-                "homeedge/dev/uptime",
+                HOMEEDGE_TOPIC_UPTIME,
                 uptime_payload,
                 0,
                 1,
@@ -503,6 +503,6 @@ void app_main(void)
             ap_info.rssi);
     }
 
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    vTaskDelay(pdMS_TO_TICKS(HOMEEDGE_TELEMETRY_INTERVAL_MS));
 }
 }

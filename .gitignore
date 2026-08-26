@@ -1,3 +1,5 @@
+.vscode/settings.json
+
 # Local secrets
 firmware/main/wifi_secrets.h
 firmware/main/mqtt_secrets.h
