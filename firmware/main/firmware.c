@@ -381,6 +381,16 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "Home Edge Monitor starting");
     ESP_LOGI(TAG, "Firmware version: %s", HOMEEDGE_FIRMWARE_VERSION);
+    ESP_LOGI(TAG, "Device: %s", HOMEEDGE_DEVICE_NAME);
+    ESP_LOGI(TAG, "Device ID: %s", HOMEEDGE_DEVICE_ID);
+    ESP_LOGI(TAG, "Telemetry interval: %u ms", HOMEEDGE_TELEMETRY_INTERVAL_MS);
+
+    ESP_LOGI(
+        TAG,
+        "Capabilities - Environment: %d, Washer: %d, Freezer: %d",
+        HOMEEDGE_HAS_ENV_SENSOR,
+        HOMEEDGE_HAS_WASHER_MONITOR,
+        HOMEEDGE_HAS_FREEZER_MONITOR);
 
     ESP_ERROR_CHECK(i2cdev_init());
 
