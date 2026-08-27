@@ -7,6 +7,9 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_timer.h"
+#include "esp_https_ota.h"
+#include "esp_system.h"
+#include "esp_app_desc.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -28,6 +31,7 @@ static sht4x_t dev;
 
 static EventGroupHandle_t wifi_event_group;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
+static bool ota_in_progress = false;
 
 #define WIFI_CONNECTED_BIT BIT0
 
@@ -185,6 +189,211 @@ static void mqtt_publish_discovery(void)
     ESP_LOGI(TAG, "MQTT discovery published");
 }
 
+static void mqtt_publish_ota_status(const char *status)
+{
+    if (mqtt_client == NULL)
+    {
+        return;
+    }
+
+    if (xEventGroupGetBits(wifi_event_group) & MQTT_CONNECTED_BIT)
+    {
+        esp_mqtt_client_publish(
+            mqtt_client,
+            HOMEEDGE_TOPIC_OTA_STATUS,
+            status,
+            0,
+            1,
+            1);
+    }
+}
+
+static void ota_task(void *pvParameter)
+{
+    ESP_LOGI(
+        TAG,
+        "Checking OTA update from %s",
+        HOMEEDGE_OTA_URL);
+
+    mqtt_publish_ota_status("checking");
+
+    esp_http_client_config_t http_config = {
+        .url = HOMEEDGE_OTA_URL,
+        .timeout_ms = 15000,
+        .keep_alive_enable = true,
+    };
+
+    esp_https_ota_config_t ota_config = {
+        .http_config = &http_config,
+    };
+
+    esp_https_ota_handle_t ota_handle = NULL;
+
+    esp_err_t ret =
+        esp_https_ota_begin(
+            &ota_config,
+            &ota_handle);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "OTA begin failed: %s",
+            esp_err_to_name(ret));
+
+        mqtt_publish_ota_status("failed");
+
+        ota_in_progress = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    esp_app_desc_t new_app_info = {0};
+
+    ret =
+        esp_https_ota_get_img_desc(
+            ota_handle,
+            &new_app_info);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to read OTA image description: %s",
+            esp_err_to_name(ret));
+
+        mqtt_publish_ota_status("failed");
+
+        esp_https_ota_abort(ota_handle);
+
+        ota_in_progress = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    const esp_app_desc_t *running_app_info =
+        esp_app_get_description();
+
+    ESP_LOGI(
+        TAG,
+        "Running firmware version: %s",
+        running_app_info->version);
+
+    ESP_LOGI(
+        TAG,
+        "Available firmware version: %s",
+        new_app_info.version);
+
+    if (memcmp(
+            new_app_info.version,
+            running_app_info->version,
+            sizeof(new_app_info.version)) == 0)
+    {
+        ESP_LOGI(
+            TAG,
+            "Firmware is already up to date");
+
+        mqtt_publish_ota_status("up_to_date");
+
+        esp_https_ota_abort(ota_handle);
+
+        ota_in_progress = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    mqtt_publish_ota_status("downloading");
+
+    do
+    {
+        ret = esp_https_ota_perform(ota_handle);
+    }
+    while (ret == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "OTA download failed: %s",
+            esp_err_to_name(ret));
+
+        mqtt_publish_ota_status("failed");
+
+        esp_https_ota_abort(ota_handle);
+
+        ota_in_progress = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (!esp_https_ota_is_complete_data_received(ota_handle))
+    {
+        ESP_LOGE(
+            TAG,
+            "OTA image was not completely received");
+
+        mqtt_publish_ota_status("failed");
+
+        esp_https_ota_abort(ota_handle);
+
+        ota_in_progress = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ret = esp_https_ota_finish(ota_handle);
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(
+            TAG,
+            "OTA finish failed: %s",
+            esp_err_to_name(ret));
+
+        mqtt_publish_ota_status("failed");
+
+        ota_in_progress = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "OTA update successful");
+
+    mqtt_publish_ota_status("success");
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    esp_restart();
+}
+
+static void ota_start(void)
+{
+    if (ota_in_progress)
+    {
+        ESP_LOGW(TAG, "OTA update already in progress");
+        mqtt_publish_ota_status("busy");
+        return;
+    }
+
+    ota_in_progress = true;
+
+    BaseType_t result = xTaskCreate(
+        ota_task,
+        "homeedge_ota",
+        8192,
+        NULL,
+        5,
+        NULL);
+
+    if (result != pdPASS)
+    {
+        ESP_LOGE(TAG, "Failed to create OTA task");
+
+        ota_in_progress = false;
+        mqtt_publish_ota_status("failed");
+    }
+}
+
 static void mqtt_event_handler(
     void *handler_args,
     esp_event_base_t base,
@@ -195,6 +404,11 @@ static void mqtt_event_handler(
     {
        case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected");
+
+            esp_mqtt_client_subscribe(
+                mqtt_client,
+                HOMEEDGE_TOPIC_OTA_COMMAND,
+                1);
 
             xEventGroupSetBits(
                 wifi_event_group,
@@ -216,9 +430,41 @@ static void mqtt_event_handler(
                 1,
                 1);
 
+            mqtt_publish_ota_status("ready");
+
             mqtt_publish_discovery();
 
             break;
+        
+                case MQTT_EVENT_DATA:
+                {
+                    esp_mqtt_event_handle_t event =
+                        (esp_mqtt_event_handle_t)event_data;
+
+                    if (event->topic_len ==
+                            strlen(HOMEEDGE_TOPIC_OTA_COMMAND) &&
+                        strncmp(
+                            event->topic,
+                            HOMEEDGE_TOPIC_OTA_COMMAND,
+                            event->topic_len) == 0)
+                    {
+                        if (event->data_len == strlen("update") &&
+                            strncmp(
+                                event->data,
+                                "update",
+                                event->data_len) == 0)
+                        {
+                            ESP_LOGI(TAG, "OTA update command received");
+                            ota_start();
+                        }
+                        else
+                        {
+                            ESP_LOGW(TAG, "Unknown OTA command received");
+                        }
+                    }
+
+                    break;
+                }
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "MQTT disconnected");
