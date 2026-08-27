@@ -10,6 +10,7 @@
 #include "esp_https_ota.h"
 #include "esp_system.h"
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -32,6 +33,7 @@ static sht4x_t dev;
 static EventGroupHandle_t wifi_event_group;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static bool ota_in_progress = false;
+static bool ota_pending_verify = false;
 
 #define WIFI_CONNECTED_BIT BIT0
 
@@ -561,6 +563,26 @@ static void wifi_event_handler(
     }
 }
 
+static void ota_check_pending_verify(void)
+{
+    const esp_partition_t *running =
+        esp_ota_get_running_partition();
+
+    esp_ota_img_states_t ota_state;
+
+    if (esp_ota_get_state_partition(
+            running,
+            &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY)
+    {
+        ota_pending_verify = true;
+
+        ESP_LOGW(
+            TAG,
+            "OTA image is pending verification");
+    }
+}
+
 static void wifi_init(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -624,12 +646,81 @@ static void wifi_init(void)
 
     ESP_LOGI(TAG, "Waiting for Wi-Fi connection...");
 
-    xEventGroupWaitBits(
-        wifi_event_group,
-        WIFI_CONNECTED_BIT,
-        pdFALSE,
-        pdTRUE,
-        portMAX_DELAY);
+    TickType_t wifi_wait =
+        ota_pending_verify
+            ? pdMS_TO_TICKS(60000)
+            : portMAX_DELAY;
+
+    EventBits_t wifi_bits =
+        xEventGroupWaitBits(
+            wifi_event_group,
+            WIFI_CONNECTED_BIT,
+            pdFALSE,
+            pdTRUE,
+            wifi_wait);
+
+    if (ota_pending_verify &&
+        !(wifi_bits & WIFI_CONNECTED_BIT))
+    {
+        ESP_LOGE(
+            TAG,
+            "OTA validation failed: Wi-Fi did not connect");
+
+        esp_ota_mark_app_invalid_rollback_and_reboot();
+    }
+}
+
+static void ota_validate_running_image(void)
+{
+    if (!ota_pending_verify)
+    {
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Validating newly installed OTA firmware");
+
+    EventBits_t mqtt_bits =
+        xEventGroupWaitBits(
+            wifi_event_group,
+            MQTT_CONNECTED_BIT,
+            pdFALSE,
+            pdTRUE,
+            pdMS_TO_TICKS(30000));
+
+    if (!(mqtt_bits & MQTT_CONNECTED_BIT))
+    {
+        ESP_LOGE(
+            TAG,
+            "OTA validation failed: MQTT did not connect");
+
+        esp_ota_mark_app_invalid_rollback_and_reboot();
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "OTA validation successful");
+
+    esp_err_t ret =
+        esp_ota_mark_app_valid_cancel_rollback();
+
+    if (ret == ESP_OK)
+    {
+        ESP_LOGI(
+            TAG,
+            "OTA firmware marked valid");
+
+        ota_pending_verify = false;
+    }
+    else
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to mark OTA firmware valid: %s",
+            esp_err_to_name(ret));
+    }
 }
 
 void app_main(void)
@@ -646,6 +737,8 @@ void app_main(void)
         HOMEEDGE_HAS_ENV_SENSOR,
         HOMEEDGE_HAS_WASHER_MONITOR,
         HOMEEDGE_HAS_FREEZER_MONITOR);
+
+    ota_check_pending_verify();
 
     #if HOMEEDGE_HAS_ENV_SENSOR
 
@@ -664,6 +757,8 @@ void app_main(void)
 
     wifi_init();
     mqtt_start();
+
+    ota_validate_running_image();
 
     while (1)
     {
