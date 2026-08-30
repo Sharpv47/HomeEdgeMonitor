@@ -36,6 +36,9 @@ static esp_mqtt_client_handle_t mqtt_client = NULL;
 static bool ota_in_progress = false;
 static bool ota_pending_verify = false;
 
+static volatile uint32_t wifi_reconnect_count = 0;
+static volatile uint32_t mqtt_reconnect_count = 0;
+
 #define WIFI_CONNECTED_BIT BIT0
 
 #define MQTT_CONNECTED_BIT BIT1
@@ -187,6 +190,46 @@ static void mqtt_publish_discovery(void)
         "}"
         "}";
 
+    const char *wifi_reconnects_config =
+        "{"
+        "\"name\":\"Wi-Fi Reconnects\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_WIFI_RECONNECTS "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_WIFI_RECONNECTS "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"state_class\":\"total_increasing\","
+        "\"entity_category\":\"diagnostic\","
+        "\"icon\":\"mdi:wifi-sync\","
+        "\"device\":{"
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
+        "}"
+        "}";
+
+    const char *mqtt_reconnects_config =
+        "{"
+        "\"name\":\"MQTT Reconnects\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_MQTT_RECONNECTS "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_MQTT_RECONNECTS "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"state_class\":\"total_increasing\","
+        "\"entity_category\":\"diagnostic\","
+        "\"icon\":\"mdi:connection\","
+        "\"device\":{"
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
+        "}"
+        "}";
+        
     #if HOMEEDGE_HAS_ENV_SENSOR
 
     esp_mqtt_client_publish(
@@ -246,6 +289,22 @@ static void mqtt_publish_discovery(void)
         0,
         1,
         1);
+    
+    esp_mqtt_client_publish(
+        mqtt_client,
+        HOMEEDGE_DISCOVERY_TOPIC_WIFI_RECONNECTS,
+        wifi_reconnects_config,
+        0,
+        1,
+        1);
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        HOMEEDGE_DISCOVERY_TOPIC_MQTT_RECONNECTS,
+        mqtt_reconnects_config,
+        0,
+        1,
+        1);    
 
     ESP_LOGI(TAG, "MQTT discovery published");
 }
@@ -528,10 +587,14 @@ static void mqtt_event_handler(
                 }
 
         case MQTT_EVENT_DISCONNECTED:
+            mqtt_reconnect_count++;
+
             ESP_LOGW(TAG, "MQTT disconnected");
+
             xEventGroupClearBits(
                 wifi_event_group,
                 MQTT_CONNECTED_BIT);
+
             break;
 
         case MQTT_EVENT_ERROR:
@@ -587,24 +650,26 @@ static void wifi_event_handler(
         esp_wifi_connect();
     }
     else if (event_base == WIFI_EVENT &&
-         event_id == WIFI_EVENT_STA_DISCONNECTED)
-{
-    wifi_event_sta_disconnected_t *event =
-        (wifi_event_sta_disconnected_t *)event_data;
+             event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        wifi_event_sta_disconnected_t *event =
+            (wifi_event_sta_disconnected_t *)event_data;
 
-    ESP_LOGW(
-        TAG,
-        "Wi-Fi disconnected, reason: %d",
-        event->reason);
+        wifi_reconnect_count++;
 
-    ESP_LOGW(TAG, "Reconnecting...");
+        ESP_LOGW(
+            TAG,
+            "Wi-Fi disconnected, reason: %d",
+            event->reason);
 
-    xEventGroupClearBits(
-        wifi_event_group,
-        WIFI_CONNECTED_BIT);
+        ESP_LOGW(TAG, "Reconnecting...");
 
-    esp_wifi_connect();
-}
+        xEventGroupClearBits(
+            wifi_event_group,
+            WIFI_CONNECTED_BIT);
+
+        esp_wifi_connect();
+    }
     else if (event_base == IP_EVENT &&
              event_id == IP_EVENT_STA_GOT_IP)
     {
@@ -927,6 +992,37 @@ void app_main(void)
                 0,
                 1,
                 0);
+            
+            char wifi_reconnect_payload[16];
+            char mqtt_reconnect_payload[16];
+
+            snprintf(
+                wifi_reconnect_payload,
+                sizeof(wifi_reconnect_payload),
+                "%" PRIu32,
+                (uint32_t)wifi_reconnect_count);
+
+            snprintf(
+                mqtt_reconnect_payload,
+                sizeof(mqtt_reconnect_payload),
+                "%" PRIu32,
+                (uint32_t)mqtt_reconnect_count);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                HOMEEDGE_TOPIC_WIFI_RECONNECTS,
+                wifi_reconnect_payload,
+                0,
+                1,
+                0);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                HOMEEDGE_TOPIC_MQTT_RECONNECTS,
+                mqtt_reconnect_payload,
+                0,
+                1,
+                0);    
 
             if (rssi_available)
             {
