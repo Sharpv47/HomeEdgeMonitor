@@ -758,8 +758,6 @@ void app_main(void)
     wifi_init();
     mqtt_start();
 
-    ota_validate_running_image();
-
     while (1)
     {
     #if HOMEEDGE_HAS_ENV_SENSOR
@@ -777,6 +775,8 @@ void app_main(void)
             (temperature_c * 9.0f / 5.0f) + 32.0f;
 
     #endif
+
+        ota_validate_running_image();
 
         wifi_ap_record_t ap_info;
         bool rssi_available =
