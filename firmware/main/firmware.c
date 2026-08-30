@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include "esp_err.h"
 #include "esp_event.h"
@@ -144,6 +145,48 @@ static void mqtt_publish_discovery(void)
         "}"
         "}";
 
+    const char *free_heap_config =
+        "{"
+        "\"name\":\"Free Heap\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_FREE_HEAP "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_FREE_HEAP "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"unit_of_measurement\":\"B\","
+        "\"state_class\":\"measurement\","
+        "\"entity_category\":\"diagnostic\","
+        "\"icon\":\"mdi:memory\","
+        "\"device\":{"
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
+        "}"
+        "}";
+
+    const char *min_free_heap_config =
+        "{"
+        "\"name\":\"Minimum Free Heap\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_MIN_FREE_HEAP "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_MIN_FREE_HEAP "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"unit_of_measurement\":\"B\","
+        "\"state_class\":\"measurement\","
+        "\"entity_category\":\"diagnostic\","
+        "\"icon\":\"mdi:memory\","
+        "\"device\":{"
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
+        "}"
+        "}";
+
     #if HOMEEDGE_HAS_ENV_SENSOR
 
     esp_mqtt_client_publish(
@@ -184,6 +227,22 @@ static void mqtt_publish_discovery(void)
         mqtt_client,
        HOMEEDGE_DISCOVERY_TOPIC_FIRMWARE,
         firmware_config,
+        0,
+        1,
+        1);
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        HOMEEDGE_DISCOVERY_TOPIC_FREE_HEAP,
+        free_heap_config,
+        0,
+        1,
+        1);
+
+    esp_mqtt_client_publish(
+        mqtt_client,
+        HOMEEDGE_DISCOVERY_TOPIC_MIN_FREE_HEAP,
+        min_free_heap_config,
         0,
         1,
         1);
@@ -830,10 +889,41 @@ void app_main(void)
                 "%lld",
                 (long long)uptime_seconds);
 
-            esp_mqtt_client_publish(
+                       esp_mqtt_client_publish(
                 mqtt_client,
                 HOMEEDGE_TOPIC_UPTIME,
                 uptime_payload,
+                0,
+                1,
+                0);
+
+            char free_heap_payload[16];
+            char min_free_heap_payload[16];
+
+            snprintf(
+                free_heap_payload,
+                sizeof(free_heap_payload),
+                "%" PRIu32,
+                esp_get_free_heap_size());
+
+            snprintf(
+                min_free_heap_payload,
+                sizeof(min_free_heap_payload),
+                "%" PRIu32,
+                esp_get_minimum_free_heap_size());
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                HOMEEDGE_TOPIC_FREE_HEAP,
+                free_heap_payload,
+                0,
+                1,
+                0);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                HOMEEDGE_TOPIC_MIN_FREE_HEAP,
+                min_free_heap_payload,
                 0,
                 1,
                 0);
