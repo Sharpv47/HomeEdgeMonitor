@@ -12,6 +12,7 @@
 #include "esp_system.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
+#include "esp_task_wdt.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -40,8 +41,66 @@ static volatile uint32_t wifi_reconnect_count = 0;
 static volatile uint32_t mqtt_reconnect_count = 0;
 
 #define WIFI_CONNECTED_BIT BIT0
-
 #define MQTT_CONNECTED_BIT BIT1
+
+#define HOMEEDGE_WATCHDOG_TIMEOUT_MS 60000U
+#define HOMEEDGE_WATCHDOG_FEED_INTERVAL_MS 5000U
+
+static const char *reset_reason_to_string(
+    esp_reset_reason_t reason)
+{
+    switch (reason)
+    {
+        case ESP_RST_POWERON:
+            return "power_on";
+
+        case ESP_RST_EXT:
+            return "external";
+
+        case ESP_RST_SW:
+            return "software";
+
+        case ESP_RST_PANIC:
+            return "panic";
+
+        case ESP_RST_INT_WDT:
+            return "interrupt_watchdog";
+
+        case ESP_RST_TASK_WDT:
+            return "task_watchdog";
+
+        case ESP_RST_WDT:
+            return "watchdog";
+
+        case ESP_RST_DEEPSLEEP:
+            return "deep_sleep";
+
+        case ESP_RST_BROWNOUT:
+            return "brownout";
+
+        case ESP_RST_SDIO:
+            return "sdio";
+
+        case ESP_RST_USB:
+            return "usb";
+
+        case ESP_RST_JTAG:
+            return "jtag";
+
+        case ESP_RST_EFUSE:
+            return "efuse";
+
+        case ESP_RST_PWR_GLITCH:
+            return "power_glitch";
+
+        case ESP_RST_CPU_LOCKUP:
+            return "cpu_lockup";
+
+        case ESP_RST_UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
 
 static void mqtt_publish_discovery(void)
 {
@@ -229,6 +288,25 @@ static void mqtt_publish_discovery(void)
             "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
         "}"
         "}";
+
+    const char *reset_reason_config =
+        "{"
+        "\"name\":\"Reset Reason\","
+        "\"unique_id\":\"" HOMEEDGE_UNIQUE_ID_RESET_REASON "\","
+        "\"state_topic\":\"" HOMEEDGE_TOPIC_RESET_REASON "\","
+        "\"availability_topic\":\"" HOMEEDGE_TOPIC_STATUS "\","
+        "\"payload_available\":\"online\","
+        "\"payload_not_available\":\"offline\","
+        "\"entity_category\":\"diagnostic\","
+        "\"icon\":\"mdi:restart-alert\","
+        "\"device\":{"
+            "\"identifiers\":[\"" HOMEEDGE_DEVICE_ID "\"],"
+            "\"name\":\"" HOMEEDGE_DEVICE_NAME "\","
+            "\"manufacturer\":\"" HOMEEDGE_MANUFACTURER "\","
+            "\"model\":\"" HOMEEDGE_MODEL "\","
+            "\"sw_version\":\"" HOMEEDGE_FIRMWARE_VERSION "\""
+        "}"
+        "}";
         
     #if HOMEEDGE_HAS_ENV_SENSOR
 
@@ -304,7 +382,15 @@ static void mqtt_publish_discovery(void)
         mqtt_reconnects_config,
         0,
         1,
-        1);    
+        1);        
+    
+    esp_mqtt_client_publish(
+        mqtt_client,
+        HOMEEDGE_DISCOVERY_TOPIC_RESET_REASON,
+        reset_reason_config,
+        0,
+        1,
+        1);
 
     ESP_LOGI(TAG, "MQTT discovery published");
 }
@@ -549,6 +635,15 @@ static void mqtt_event_handler(
                 0,
                 1,
                 1);
+
+            esp_mqtt_client_publish(
+                mqtt_client,
+                HOMEEDGE_TOPIC_RESET_REASON,
+                reset_reason_to_string(
+                    esp_reset_reason()),
+                0,
+                1,
+                1);    
 
             mqtt_publish_ota_status("ready");
 
@@ -847,6 +942,51 @@ static void ota_validate_running_image(void)
     }
 }
 
+static void homeedge_watchdog_init(void)
+{
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = HOMEEDGE_WATCHDOG_TIMEOUT_MS,
+        .idle_core_mask =
+            (1U << configNUMBER_OF_CORES) - 1U,
+        .trigger_panic = true,
+    };
+
+    ESP_ERROR_CHECK(
+        esp_task_wdt_reconfigure(
+            &wdt_config));
+
+    ESP_ERROR_CHECK(
+        esp_task_wdt_add(NULL));
+
+    ESP_LOGI(
+        TAG,
+        "Task watchdog enabled: %u ms timeout",
+        HOMEEDGE_WATCHDOG_TIMEOUT_MS);
+}
+
+static void homeedge_watchdog_delay(
+    uint32_t delay_ms)
+{
+    uint32_t remaining_ms = delay_ms;
+
+    while (remaining_ms > 0)
+    {
+        uint32_t chunk_ms =
+            remaining_ms >
+                    HOMEEDGE_WATCHDOG_FEED_INTERVAL_MS
+                ? HOMEEDGE_WATCHDOG_FEED_INTERVAL_MS
+                : remaining_ms;
+
+        vTaskDelay(
+            pdMS_TO_TICKS(chunk_ms));
+
+        ESP_ERROR_CHECK(
+            esp_task_wdt_reset());
+
+        remaining_ms -= chunk_ms;
+    }
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Home Edge Monitor starting");
@@ -854,6 +994,12 @@ void app_main(void)
     ESP_LOGI(TAG, "Device: %s", HOMEEDGE_DEVICE_NAME);
     ESP_LOGI(TAG, "Device ID: %s", HOMEEDGE_DEVICE_ID);
     ESP_LOGI(TAG, "Telemetry interval: %u ms", HOMEEDGE_TELEMETRY_INTERVAL_MS);
+
+    ESP_LOGI(
+        TAG,
+        "Reset reason: %s",
+        reset_reason_to_string(
+            esp_reset_reason()));
 
     ESP_LOGI(
         TAG,
@@ -881,6 +1027,8 @@ void app_main(void)
 
     wifi_init();
     mqtt_start();
+
+    homeedge_watchdog_init();
 
     while (1)
     {
@@ -1067,6 +1215,7 @@ void app_main(void)
                 ap_info.rssi);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(HOMEEDGE_TELEMETRY_INTERVAL_MS));
+        homeedge_watchdog_delay(
+            HOMEEDGE_TELEMETRY_INTERVAL_MS);
     }
 }
